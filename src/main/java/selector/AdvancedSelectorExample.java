@@ -28,17 +28,24 @@ public class AdvancedSelectorExample {
      */
     private static class ClientInfo {
         private final int clientId;
+        private String clientName;  // Make mutable to update from client request
         private final long connectTime;
         private ByteBuffer readBuffer;
         private ByteBuffer writeBuffer;
+        private boolean nameRegistered = false;  // Track if client has sent name
 
-        public ClientInfo(int clientId) {
+        public ClientInfo(int clientId, String initialName) {
             this.clientId = clientId;
+            this.clientName = initialName;
             this.connectTime = System.currentTimeMillis();
             this.readBuffer = ByteBuffer.allocate(1024);
         }
 
         public int getClientId() { return clientId; }
+        public String getClientName() { return clientName; }
+        public void setClientName(String clientName) { this.clientName = clientName; }
+        public boolean isNameRegistered() { return nameRegistered; }
+        public void setNameRegistered(boolean registered) { this.nameRegistered = registered; }
         public long getConnectTime() { return connectTime; }
         public ByteBuffer getReadBuffer() { return readBuffer; }
         public ByteBuffer getWriteBuffer() { return writeBuffer; }
@@ -148,7 +155,8 @@ public class AdvancedSelectorExample {
 
         if (clientChannel != null) {
             int clientId = clientCounter.incrementAndGet();
-            ClientInfo clientInfo = new ClientInfo(clientId);
+            // Client name will be set when first message is received
+            ClientInfo clientInfo = new ClientInfo(clientId, "Client-" + clientId);
 
             clientChannel.configureBlocking(false);
             SelectionKey clientKey = clientChannel.register(selector, SelectionKey.OP_READ);
@@ -156,11 +164,11 @@ public class AdvancedSelectorExample {
 
             clients.put(clientChannel, clientInfo);
 
-            System.out.println("Client " + clientId + " connected from " +
-                             clientChannel.getRemoteAddress());
+            System.out.println("New connection (ID: " + clientId + ") from " +
+                             clientChannel.getRemoteAddress() + " - waiting for client name");
 
-            // Send welcome message
-            String welcome = "Welcome! You are client " + clientId + "\n";
+            // Send welcome message asking for client name
+            String welcome = "Welcome! Please send your client name first.\n";
             ByteBuffer welcomeBuffer = ByteBuffer.wrap(welcome.getBytes(StandardCharsets.UTF_8));
             clientInfo.setWriteBuffer(welcomeBuffer);
             clientKey.interestOps(SelectionKey.OP_READ | SelectionKey.OP_WRITE);
@@ -187,7 +195,22 @@ public class AdvancedSelectorExample {
             String message = StandardCharsets.UTF_8.decode(buffer).toString();
             buffer.clear();
 
-            System.out.println("Client " + clientInfo.getClientId() + " says: " + message.trim());
+            // Handle client name registration first
+            if (!clientInfo.isNameRegistered()) {
+                String clientName = message.trim();
+                clientInfo.setClientName(clientName);
+                clientInfo.setNameRegistered(true);
+
+                System.out.println("Client registered as: " + clientName + " (ID: " + clientInfo.getClientId() + ")");
+
+                String response = "Hello " + clientName + "! You are now registered. Available commands: time, uptime, clients, help, quit\n";
+                ByteBuffer responseBuffer = ByteBuffer.wrap(response.getBytes(StandardCharsets.UTF_8));
+                clientInfo.setWriteBuffer(responseBuffer);
+                key.interestOps(SelectionKey.OP_READ | SelectionKey.OP_WRITE);
+                return;
+            }
+
+            System.out.println(clientInfo.getClientName() + " says: " + message.trim());
 
             // Process different commands
             String response = processClientMessage(clientInfo, message.trim());
@@ -200,7 +223,7 @@ public class AdvancedSelectorExample {
 
         } else if (bytesRead == -1) {
             // Client disconnected
-            System.out.println("Client " + clientInfo.getClientId() + " disconnected");
+            System.out.println(clientInfo.getClientName() + " disconnected");
             cleanupKey(key);
         }
     }
@@ -285,66 +308,91 @@ public class AdvancedSelectorExample {
         System.out.println("\nStarting advanced clients...");
 
         // Client that asks for time
-        new Thread(() -> runCommandClient("time")).start();
+        new Thread(() -> runCommandClient("TimeClient", "time")).start();
 
         // Client that checks uptime
-        new Thread(() -> runCommandClient("uptime")).start();
+        new Thread(() -> runCommandClient("UptimeClient", "uptime")).start();
 
-        // Client that sends multiple commands
-        new Thread(() -> {
-            try (SocketChannel channel = SocketChannel.open()) {
-                channel.connect(new InetSocketAddress("localhost", PORT));
-
-                String[] commands = {"help", "clients", "time", "quit"};
-
-                for (String command : commands) {
-                    // Send command
-                    ByteBuffer buffer = ByteBuffer.wrap((command + "\n").getBytes(StandardCharsets.UTF_8));
-                    channel.write(buffer);
-
-                    // Read response
-                    ByteBuffer responseBuffer = ByteBuffer.allocate(1024);
-                    channel.read(responseBuffer);
-                    responseBuffer.flip();
-                    String response = StandardCharsets.UTF_8.decode(responseBuffer).toString();
-                    System.out.println("Multi-command client received: " + response.trim());
-
-                    Thread.sleep(500);
-                }
-
-            } catch (IOException | InterruptedException e) {
-                System.err.println("Multi-command client error: " + e.getMessage());
-            }
-        }).start();
+        // Multi-command client
+        new Thread(() -> runMultiCommandClient("MultiClient")).start();
     }
 
     /**
-     * Run a client that sends a specific command.
+     * Establishes connection and handles client name registration.
+     * Returns the connected channel or null if connection failed.
      */
-    private static void runCommandClient(String command) {
-        try (SocketChannel channel = SocketChannel.open()) {
-            channel.connect(new InetSocketAddress("localhost", PORT));
+    private static SocketChannel connectAndRegister(String clientName) throws IOException {
+        SocketChannel channel = SocketChannel.open();
+        channel.connect(new InetSocketAddress("localhost", PORT));
 
-            // Read welcome message
-            ByteBuffer welcomeBuffer = ByteBuffer.allocate(1024);
-            channel.read(welcomeBuffer);
-            welcomeBuffer.flip();
-            String welcome = StandardCharsets.UTF_8.decode(welcomeBuffer).toString();
-            System.out.println("Client received welcome: " + welcome.trim());
+        // Read welcome message
+        ByteBuffer welcomeBuffer = ByteBuffer.allocate(1024);
+        channel.read(welcomeBuffer);
+        welcomeBuffer.flip();
+        String welcome = StandardCharsets.UTF_8.decode(welcomeBuffer).toString();
+        System.out.println(clientName + " received welcome: " + welcome.trim());
 
-            // Send command
-            ByteBuffer commandBuffer = ByteBuffer.wrap((command + "\n").getBytes(StandardCharsets.UTF_8));
-            channel.write(commandBuffer);
+        // Send client name for registration
+        ByteBuffer nameBuffer = ByteBuffer.wrap((clientName + "\n").getBytes(StandardCharsets.UTF_8));
+        channel.write(nameBuffer);
 
-            // Read response
-            ByteBuffer responseBuffer = ByteBuffer.allocate(1024);
-            channel.read(responseBuffer);
-            responseBuffer.flip();
-            String response = StandardCharsets.UTF_8.decode(responseBuffer).toString();
-            System.out.println("Command '" + command + "' response: " + response.trim());
+        // Read registration confirmation
+        ByteBuffer confirmBuffer = ByteBuffer.allocate(1024);
+        channel.read(confirmBuffer);
+        confirmBuffer.flip();
+        String confirmation = StandardCharsets.UTF_8.decode(confirmBuffer).toString();
+        System.out.println(clientName + " registration: " + confirmation.trim());
 
+        return channel;
+    }
+
+    /**
+     * Sends a command and reads the response.
+     */
+    private static void sendCommandAndReadResponse(SocketChannel channel, String clientName, String command) throws IOException {
+        // Send command
+        ByteBuffer commandBuffer = ByteBuffer.wrap((command + "\n").getBytes(StandardCharsets.UTF_8));
+        channel.write(commandBuffer);
+
+        // Read response
+        ByteBuffer responseBuffer = ByteBuffer.allocate(1024);
+        channel.read(responseBuffer);
+        responseBuffer.flip();
+        String response = StandardCharsets.UTF_8.decode(responseBuffer).toString();
+        System.out.println(clientName + " received response to '" + command + "': " + response.trim());
+    }
+
+    /**
+     * Run a client that sends multiple commands sequentially on a single connection.
+     */
+    private static void runMultiCommandClient(String clientName) {
+        String[] commands = {"help", "clients", "time", "quit"};
+
+        try (SocketChannel channel = connectAndRegister(clientName)) {
+            // Send multiple commands on the same connection
+            for (String command : commands) {
+                try {
+                    sendCommandAndReadResponse(channel, clientName, command);
+                    Thread.sleep(500); // Wait between commands
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    System.err.println(clientName + " was interrupted");
+                    break;
+                }
+            }
         } catch (IOException e) {
-            System.err.println("Command client (" + command + ") error: " + e.getMessage());
+            System.err.println(clientName + " error: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Run a client that sends a specific command with a given client name.
+     */
+    private static void runCommandClient(String clientName, String command) {
+        try (SocketChannel channel = connectAndRegister(clientName)) {
+            sendCommandAndReadResponse(channel, clientName, command);
+        } catch (IOException e) {
+            System.err.println(clientName + " error: " + e.getMessage());
         }
     }
 }
