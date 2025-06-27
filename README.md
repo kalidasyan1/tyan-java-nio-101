@@ -164,6 +164,48 @@ while (true) {
 - **Resource cleanup**: Manual cleanup when automatic cleanup isn't sufficient
 - **Connection state validation**: Checking channel state before operations
 
+## Recent Updates & Key Learnings
+
+### Buffer Management Best Practices
+
+**Critical Issue: Buffer Sharing and Overwriting**
+- **Problem**: Using the same buffer attachment for both read and write operations can cause data corruption
+- **Solution**: Separate read and write buffers using a client state object
+- **Lesson**: Always maintain separate buffers for different I/O operations to prevent data loss
+
+### Message Framing in NIO Applications
+
+**Read Buffer Reuse vs Write Buffer Creation**
+- **Read buffers**: Should be reused (allocated once per client) for memory efficiency
+- **Write buffers**: Created fresh for each response to match variable message sizes
+- **Rationale**: Read operations are predictable (fixed buffer size), write operations are variable (response-dependent size)
+
+### Selector Event Handling Insights
+
+**When Channels Become Ready:**
+- **Read Ready**: When data arrives in socket receive buffer, client disconnects, or after being previously blocked
+- **Write Ready**: When socket send buffer has space (usually always), after partial writes complete, or initially after connection
+
+**Partial Read/Write Handling:**
+- `read()` doesn't guarantee all available data is read - may need multiple read cycles
+- Remaining data in OS socket buffer triggers immediate selector notification
+- Must loop until `read()` returns 0 or handle partial data with `compact()`
+
+### Message Framing Strategies
+
+**Complete vs Partial Messages:**
+- TCP is a stream protocol - messages can arrive fragmented across multiple read operations
+- Use delimiters (like newlines) to identify complete messages
+- `buffer.compact()` preserves partial data for the next read cycle
+- For simplified scenarios: assume one message per read when clients wait for responses
+
+### Simplified vs Complex Implementations
+
+**Trade-offs Demonstrated:**
+- **Complex**: Full message framing with queues handles any client behavior
+- **Simple**: Single message assumption reduces complexity but limits client interaction patterns
+- **Choice depends on**: Application requirements, expected client behavior, and performance needs
+
 ## Running the Examples
 
 ### Prerequisites

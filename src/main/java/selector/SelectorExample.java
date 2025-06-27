@@ -11,7 +11,6 @@ import java.nio.charset.StandardCharsets;
 import java.util.Iterator;
 import java.util.Set;
 
-
 /**
  * Demonstrates the usage of Java NIO Selector for multiplexed I/O operations.
  * This example shows how to handle multiple channels with a single thread.
@@ -20,6 +19,36 @@ public class SelectorExample {
 
   private static final int PORT = 8081;
   private static final String SERVER_ADDRESS = "localhost";
+
+  /**
+   * Client state to manage separate read and write buffers
+   * Simplified for one-message-at-a-time scenario
+   */
+  private static class ClientState {
+    private ByteBuffer readBuffer;
+    private ByteBuffer writeBuffer;
+
+    public ClientState() {
+      this.readBuffer = ByteBuffer.allocate(1024);
+      this.writeBuffer = null;
+    }
+
+    public ByteBuffer getReadBuffer() {
+      return readBuffer;
+    }
+
+    public ByteBuffer getWriteBuffer() {
+      return writeBuffer;
+    }
+
+    public void setWriteBuffer(ByteBuffer buffer) {
+      this.writeBuffer = buffer;
+    }
+
+    public boolean hasWriteData() {
+      return writeBuffer != null && writeBuffer.hasRemaining();
+    }
+  }
 
   public static void main(String[] args) {
     System.out.println("=== Selector Examples ===");
@@ -103,48 +132,47 @@ public class SelectorExample {
       System.out.println("New client connected: " + clientChannel.getRemoteAddress());
 
       clientChannel.configureBlocking(false);
-      // Register client channel for read operations
-      clientChannel.register(selector, SelectionKey.OP_READ);
+      // Create client state and attach to the key
+      ClientState clientState = new ClientState();
+      SelectionKey clientKey = clientChannel.register(selector, SelectionKey.OP_READ);
+      clientKey.attach(clientState);
     }
   }
 
   /**
    * Handles reading data from client channels.
-   */
-  /**
-   * Handles reading data from client channels.
+   * Simplified version assuming one message per read and client waits for response.
    */
   private static void handleRead(SelectionKey key) throws IOException {
     SocketChannel clientChannel = (SocketChannel) key.channel();
+    ClientState clientState = (ClientState) key.attachment();
 
-    // Get or create buffer for this client
-    ByteBuffer buffer = (ByteBuffer) key.attachment();
-    if (buffer == null) {
-      buffer = ByteBuffer.allocate(1024);
-      key.attach(buffer);
+    if (clientState == null) {
+      clientState = new ClientState();
+      key.attach(clientState);
     }
 
+    ByteBuffer readBuffer = clientState.getReadBuffer();
+
     try {
-      int bytesRead = clientChannel.read(buffer);
+      int bytesRead = clientChannel.read(readBuffer);
 
       if (bytesRead > 0) {
-        // Check for complete message (assuming newline-delimited messages)
-        buffer.flip();
-        String data = StandardCharsets.UTF_8.decode(buffer).toString();
+        // Process the received data
+        readBuffer.flip();
+        String message = StandardCharsets.UTF_8.decode(readBuffer).toString().trim();
+        readBuffer.clear(); // Clear buffer for next message
 
-        if (data.contains("\n")) {
-          // Complete message received
-          String message = data.trim();
-          System.out.println("Received from client: " + message);
+        if (!message.isEmpty()) {
+          System.out.println("Received message: " + message);
 
-          // Prepare response and switch to write mode
+          // Prepare response
           String response = "Echo: " + message + "\n";
-          ByteBuffer responseBuffer = ByteBuffer.wrap(response.getBytes(StandardCharsets.UTF_8));
-          key.attach(responseBuffer);
+          ByteBuffer writeBuffer = ByteBuffer.wrap(response.getBytes(StandardCharsets.UTF_8));
+          clientState.setWriteBuffer(writeBuffer);
+
+          // Switch to write mode
           key.interestOps(SelectionKey.OP_WRITE);
-        } else {
-          // Incomplete message, continue reading
-          buffer.compact(); // Prepare for more data
         }
       } else if (bytesRead == -1) {
         // Client disconnected
@@ -152,6 +180,8 @@ public class SelectorExample {
         key.cancel();
         clientChannel.close();
       }
+      // bytesRead == 0 means no data available, just continue
+
     } catch (IOException e) {
       System.err.println("Error reading from client: " + e.getMessage());
       key.cancel();
@@ -164,15 +194,28 @@ public class SelectorExample {
    */
   private static void handleWrite(SelectionKey key) throws IOException {
     SocketChannel clientChannel = (SocketChannel) key.channel();
-    ByteBuffer buffer = (ByteBuffer) key.attachment();
+    ClientState clientState = (ClientState) key.attachment();
+
+    if (clientState == null || !clientState.hasWriteData()) {
+      // Nothing to write, switch back to read mode
+      key.interestOps(SelectionKey.OP_READ);
+      return;
+    }
+
+    ByteBuffer writeBuffer = clientState.getWriteBuffer();
 
     try {
-      clientChannel.write(buffer);
+      int bytesWritten = clientChannel.write(writeBuffer);
 
-      if (!buffer.hasRemaining()) {
-        // All data written, switch back to read mode
+      if (!writeBuffer.hasRemaining()) {
+        // Current buffer fully written, clear the buffer
+        clientState.setWriteBuffer(null);
+
+        // Switch back to read mode
         key.interestOps(SelectionKey.OP_READ);
-        key.attach(null);
+      } else if (bytesWritten == 0) {
+        // Socket buffer full, stay in write mode and try again later
+        // The selector will notify us when the channel is ready for write again
       }
     } catch (IOException e) {
       System.err.println("Error writing to client: " + e.getMessage());
