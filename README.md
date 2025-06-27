@@ -164,6 +164,199 @@ while (true) {
 - **Resource cleanup**: Manual cleanup when automatic cleanup isn't sufficient
 - **Connection state validation**: Checking channel state before operations
 
+## Project Package Examples
+
+### 1. AdvancedHttpServer (`AdvancedHttpServer.java`)
+
+**A production-ready HTTP/1.1 server built on BaseNioServer with full request parsing, multiple endpoints, and connection tracking.**
+
+**Key Features:**
+- **HTTP/1.1 implementation**: Complete request parsing and response generation
+- **Multiple endpoints**: `/`, `/time`, `/clients`, `/uptime`, `/health`, 404 handling
+- **Connection tracking**: Unique connection IDs and statistics monitoring
+- **Keep-alive support**: HTTP connection reuse for better performance
+- **Extensible design**: Template method pattern via BaseNioServer inheritance
+
+**Usage Pattern:**
+```java
+// Start the server
+AdvancedHttpServer server = new AdvancedHttpServer();
+server.startServer(); // Runs on port 8080
+// Server runs indefinitely until manually stopped
+```
+
+### 2. BaseNioServer (`BaseNioServer.java`)
+
+**Key Concepts:**
+- **Abstract base class**: Provides common NIO server functionality for reuse
+- **Generic client info**: Type-safe client information management with generics
+- **Connection lifecycle**: Handles accept, read, write, and cleanup operations
+- **Resource management**: Automatic cleanup of disconnected clients and proper resource disposal
+- **Template method pattern**: Subclasses implement specific behavior while base handles common operations
+
+**Extension Points:**
+```java
+// Implement these abstract methods in subclasses
+protected abstract String getServerName();
+protected abstract T createClientInfo(int connectionId, String remoteAddress);
+protected abstract void processClientData(T clientInfo, String data, SelectionKey key);
+
+// Optional hook methods
+protected void onClientConnected(T clientInfo, SocketChannel channel);
+protected void onClientDisconnected(T clientInfo, SocketChannel channel);
+protected void onWriteComplete(T clientInfo, SelectionKey key);
+```
+
+### 3. HttpClientRunner (`HttpClientRunner.java`)
+
+**Key Features:**
+- **Modern HTTP client**: Uses Java 11+ HttpClient for efficient HTTP operations
+- **Synchronous and asynchronous requests**: Demonstrates both blocking and non-blocking HTTP patterns
+- **Multiple client simulation**: Creates 3 different logical clients with unique User-Agent headers
+- **Configurable testing**: Can test any HTTP server on specified port
+- **Connection patterns**: Shows different request patterns (sequential, parallel, mixed)
+
+**Client Types:**
+- **Modern-Client-1**: Synchronous requests to `/`, `/time`, `/clients`
+- **Modern-Client-2**: Asynchronous requests to `/health`, `/uptime`, `/nonexistent`
+- **Modern-Client-3**: Mixed synchronous and asynchronous requests
+
+**Usage Pattern:**
+```java
+// Test a server running on specific port
+HttpClientRunner.runModernHttpClients(8080);
+
+// Or run standalone against any server
+java -cp target/classes project.HttpClientRunner [port]
+```
+
+## Running the Project Examples
+
+### Prerequisites
+- Java 11 or higher (required for HttpClient in HttpClientRunner)
+- Maven 3.6 or higher
+
+### Compilation
+```bash
+mvn compile
+```
+
+### Running the Advanced HTTP Server & Client System
+
+#### Option 1: Run Server and Client Separately (Recommended)
+
+**Step 1: Start the HTTP Server**
+```bash
+# Terminal 1 - Start the server (runs indefinitely)
+mvn exec:java -Dexec.mainClass="project.AdvancedHttpServer"
+```
+
+**Step 2: Test with HTTP Client**
+```bash
+# Terminal 2 - Run the HTTP client tests
+mvn exec:java -Dexec.mainClass="project.HttpClientRunner"
+
+# Or test against a different port
+mvn exec:java -Dexec.mainClass="project.HttpClientRunner" -Dexec.args="8080"
+```
+
+**Step 3: Test with Web Browser**
+```bash
+# Open your web browser and visit:
+http://localhost:8080/
+http://localhost:8080/time
+http://localhost:8080/clients
+http://localhost:8080/health
+```
+
+#### Option 2: Test with curl
+```bash
+# Test different endpoints
+curl http://localhost:8080/
+curl http://localhost:8080/time
+curl http://localhost:8080/clients
+curl http://localhost:8080/health
+
+# Test with custom User-Agent
+curl -H "User-Agent: TestClient" http://localhost:8080/
+```
+
+### Expected Output
+
+**Server Log Example:**
+```
+=== Advanced HTTP Server Example ===
+Starting Advanced HTTP Server on port 8080
+Advanced HTTP Server ready for connections
+New connection (ID: 1) from /127.0.0.1:52341 (Active connections: 1)
+Connection 1: GET /
+New connection (ID: 2) from /127.0.0.1:52342 (Active connections: 1)
+Connection 2: GET /time
+Advanced HTTP Server status: 1 active connections
+```
+
+**Client Log Example:**
+```
+=== HTTP Client Runner ===
+Testing HTTP server on port: 8080
+Starting modern HTTP clients...
+Modern-Client-1 - GET / -> 200 OK
+Modern-Client-2 (async) - GET /health -> 200 OK
+Modern-Client-3 - GET / -> 200 OK
+```
+
+### Running Traditional Channel Examples
+```bash
+# Channel examples
+mvn exec:java -Dexec.mainClass="channel.SocketChannelExample"
+mvn exec:java -Dexec.mainClass="channel.FileChannelExample"
+mvn exec:java -Dexec.mainClass="channel.ServerSocketChannelExample"
+mvn exec:java -Dexec.mainClass="channel.ChannelTransferExample"
+```
+
+### Running Traditional Selector Examples
+```bash
+# Selector examples
+mvn exec:java -Dexec.mainClass="selector.SelectorExample"
+mvn exec:java -Dexec.mainClass="selector.AdvancedSelectorExample"
+```
+
+## Architecture Insights
+
+### Production-Ready Server Design
+
+**Separation of Concerns:**
+- **BaseNioServer**: Generic NIO server infrastructure
+- **AdvancedHttpServer**: HTTP-specific protocol implementation
+- **HttpClientRunner**: Testing and demonstration client
+
+**Connection Management:**
+- Each connection gets a unique ID for tracking and debugging
+- Separate read/write buffers prevent data corruption
+- Proper resource cleanup prevents memory leaks
+- Connection statistics for monitoring and debugging
+
+**HTTP Implementation:**
+- Full HTTP request parsing with headers and methods
+- Proper HTTP response formatting with standard headers
+- Content-Length calculation for binary safety
+- Connection keep-alive support for performance
+
+### Client Testing Strategy
+
+**Multiple Client Types:**
+- Different User-Agent headers to simulate distinct clients
+- Mix of synchronous and asynchronous request patterns
+- Various endpoints to test different server functionality
+- Error handling for network issues and HTTP errors
+
+**Real-World Testing:**
+- Can test against any HTTP server (not just the provided one)
+- Configurable port for testing different environments
+- Proper timeout handling for production scenarios
+
+
+
 ## Recent Updates & Key Learnings
 
 ### Buffer Management Best Practices
@@ -274,3 +467,4 @@ Based on the comprehensive tutorials from:
 ## License
 
 This project is provided as educational material for learning Java NIO concepts.
+
